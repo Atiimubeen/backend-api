@@ -166,49 +166,36 @@ app.get('/api/dashboard-summary', authMiddleware, async (req, res) => {
   try {
     const { season_id } = req.query;
     
-    let purchaseQuery, salesQuery, expenseQuery, stockQuery;
+    let query;
     let params = [];
     
     if (season_id) {
-      // Season-specific queries
-      purchaseQuery = `
-        SELECT COALESCE(SUM(quantity * unit_price), 0) AS total_purchases
-        FROM Purchases 
-        WHERE season_id = $1
-      `;
-      salesQuery = `
-        SELECT COALESCE(SUM(quantity * unit_price), 0) AS total_sales
-        FROM Sales 
-        WHERE season_id = $1
-      `;
-      expenseQuery = `
-        SELECT COALESCE(SUM(amount), 0) AS total_expenses
-        FROM Expenses 
-        WHERE season_id = $1
+      // Season-specific query - SIMPLE VERSION
+      query = `
+        SELECT
+          COALESCE((SELECT SUM(quantity * unit_price) FROM Purchases WHERE season_id = $1), 0) AS total_purchases,
+          COALESCE((SELECT SUM(quantity * unit_price) FROM Sales WHERE season_id = $1), 0) AS total_sales,
+          COALESCE((SELECT SUM(amount) FROM Expenses WHERE season_id = $1), 0) AS total_expenses,
+          COALESCE((SELECT SUM(stock_quantity) FROM Items), 0) AS total_stock_quantity
       `;
       params = [season_id];
     } else {
-      // All seasons queries (original behavior)
-      purchaseQuery = `SELECT COALESCE(SUM(quantity * unit_price), 0) AS total_purchases FROM Purchases`;
-      salesQuery = `SELECT COALESCE(SUM(quantity * unit_price), 0) AS total_sales FROM Sales`;
-      expenseQuery = `SELECT COALESCE(SUM(amount), 0) AS total_expenses FROM Expenses`;
+      // Original query (unchanged)
+      query = `
+        SELECT
+          COALESCE((SELECT SUM(quantity * unit_price) FROM Purchases), 0) AS total_purchases,
+          COALESCE((SELECT SUM(quantity * unit_price) FROM Sales), 0) AS total_sales,
+          COALESCE((SELECT SUM(amount) FROM Expenses), 0) AS total_expenses,
+          COALESCE((SELECT SUM(stock_quantity) FROM Items), 0) AS total_stock_quantity
+      `;
     }
+
+    const result = await pool.query(query, params);
+    const stats = result.rows[0];
     
-    // Stock quantity is always total (not season-specific)
-    stockQuery = `SELECT COALESCE(SUM(stock_quantity), 0) AS total_stock_quantity FROM Items`;
-
-    // Execute all queries
-    const [purchaseResult, salesResult, expenseResult, stockResult] = await Promise.all([
-      pool.query(purchaseQuery, params),
-      pool.query(salesQuery, params),
-      pool.query(expenseQuery, params),
-      pool.query(stockQuery)
-    ]);
-
-    const totalPurchases = parseFloat(purchaseResult.rows[0].total_purchases) || 0;
-    const totalSales = parseFloat(salesResult.rows[0].total_sales) || 0;
-    const totalExpenses = parseFloat(expenseResult.rows[0].total_expenses) || 0;
-    const totalStockQuantity = parseFloat(stockResult.rows[0].total_stock_quantity) || 0;
+    const totalPurchases = parseFloat(stats.total_purchases) || 0;
+    const totalSales = parseFloat(stats.total_sales) || 0;
+    const totalExpenses = parseFloat(stats.total_expenses) || 0;
     const profit = totalSales - (totalPurchases + totalExpenses);
 
     res.json({
@@ -217,16 +204,17 @@ app.get('/api/dashboard-summary', authMiddleware, async (req, res) => {
         totalPurchases,
         totalSales,
         totalExpenses,
-        totalStockValue: totalStockQuantity,
+        totalStockValue: parseFloat(stats.total_stock_quantity) || 0,
         profit,
-        seasonFiltered: !!season_id
       }
     });
   } catch (err) {
     console.error('Dashboard summary error:', err.message);
-    res.status(500).json({ success: false, msg: 'Server Error' });
+    console.error('Error stack:', err.stack); // Extra debugging
+    res.status(500).json({ success: false, msg: 'Server Error', error: err.message });
   }
 });
+
 
 // Items Routes
 app.get('/api/items', authMiddleware, async (req, res) => {
@@ -843,7 +831,36 @@ app.put('/api/users/:id', [authMiddleware, superAdminMiddleware], async (req, re
     res.status(500).json({ success: false, msg: 'Server Error' });
   }
 });
+app.get('/api/season-items-count', authMiddleware, async (req, res) => {
+  try {
+    const { season_id } = req.query;
+    
+    if (!season_id) {
+      return res.status(400).json({ success: false, msg: 'season_id is required' });
+    }
 
+    // Count unique items in purchases and sales for this season
+    const query = `
+      SELECT COUNT(DISTINCT item_id) as total_items
+      FROM (
+        SELECT item_id FROM Purchases WHERE season_id = $1
+        UNION
+        SELECT item_id FROM Sales WHERE season_id = $1
+      ) AS season_items
+    `;
+
+    const result = await pool.query(query, [season_id]);
+    const totalItems = parseInt(result.rows[0].total_items) || 0;
+
+    res.json({
+      success: true,
+      data: { totalItems }
+    });
+  } catch (err) {
+    console.error('Season items count error:', err.message);
+    res.status(500).json({ success: false, msg: 'Server Error', error: err.message });
+  }
+});
 /// --- FINAL CORRECTED USER DELETE ROUTE ---
 app.delete('/api/users/:id', [authMiddleware, superAdminMiddleware], async (req, res) => {
   const client = await pool.connect();
