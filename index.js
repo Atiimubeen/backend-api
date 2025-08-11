@@ -295,20 +295,32 @@ app.delete('/api/items/:id', [authMiddleware, adminMiddleware], async (req, res)
 // Purchases Routes
 app.get('/api/purchases', authMiddleware, async (req, res) => {
   try {
-    const allPurchases = await pool.query(`
+    const { season_id } = req.query; // Add this line to get season_id from query
+    
+    let query = `
       SELECT p.*, i.item_name, s.season_name
       FROM Purchases p
       JOIN Items i ON p.item_id = i.item_id
       LEFT JOIN Seasons s ON p.season_id = s.season_id
-      ORDER BY p.date DESC, p.purchase_id DESC
-    `);
+    `;
+    
+    let params = [];
+    
+    // Add season filter if season_id is provided
+    if (season_id) {
+      query += ` WHERE p.season_id = $1`;
+      params.push(season_id);
+    }
+    
+    query += ` ORDER BY p.date DESC, p.purchase_id DESC`;
+    
+    const allPurchases = await pool.query(query, params);
     res.json({ success: true, data: allPurchases.rows });
   } catch (err) {
     console.error('Get purchases error:', err.message);
     res.status(500).json({ success: false, msg: 'Server Error' });
   }
 });
-
 app.post('/api/purchases', [authMiddleware, adminMiddleware], async (req, res) => {
   const client = await pool.connect();
   try {
