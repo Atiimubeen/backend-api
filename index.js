@@ -13,13 +13,11 @@ app.use(cors());
 
 // Database connection
 const pool = new Pool({
-  user: 'postgres',
-  host: 'localhost',
-  database: 'inventory_db',
-  password: 'admin0099',
-  port: 5432,
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
-
 // Test database connection
 pool.connect((err, client, release) => {
   if (err) {
