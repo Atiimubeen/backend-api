@@ -628,24 +628,23 @@ app.delete('/api/seasons/:id', [authMiddleware, adminMiddleware], async (req, re
   }
 });
 
-// Report Route
 app.get('/api/report', authMiddleware, async (req, res) => {
   try {
     const { season_id, item_id, start_date, end_date } = req.query;
     
-    // Build the main query with better structure
+    // Build the main query with fixed column references
     let baseQuery = `
       WITH combined_transactions AS (
         SELECT 
           'purchase' AS transaction_type, 
-          purchase_id AS id, 
-          date, 
-          item_id, 
-          quantity, 
-          unit_price,
-          (quantity * unit_price) as total_amount,
-          vendor_name AS party_name, 
-          season_id,
+          p.purchase_id AS id, 
+          p.date, 
+          p.item_id, 
+          p.quantity, 
+          p.unit_price,
+          (p.quantity * p.unit_price) as total_amount,
+          p.vendor_name AS party_name, 
+          p.season_id,
           i.item_name,
           s.season_name
         FROM Purchases p
@@ -656,14 +655,14 @@ app.get('/api/report', authMiddleware, async (req, res) => {
         
         SELECT 
           'sale' AS transaction_type, 
-          sale_id AS id, 
-          date, 
-          item_id, 
-          quantity, 
-          unit_price, 
-          (quantity * unit_price) as total_amount,
-          customer_name AS party_name, 
-          season_id,
+          sa.sale_id AS id, 
+          sa.date, 
+          sa.item_id, 
+          sa.quantity, 
+          sa.unit_price, 
+          (sa.quantity * sa.unit_price) as total_amount,
+          sa.customer_name AS party_name, 
+          sa.season_id,
           i.item_name,
           s.season_name
         FROM Sales sa
@@ -674,14 +673,14 @@ app.get('/api/report', authMiddleware, async (req, res) => {
         
         SELECT 
           'expense' AS transaction_type,
-          expense_id AS id,
-          date,
-          item_id,
+          e.expense_id AS id,
+          e.date,
+          e.item_id,
           NULL::numeric AS quantity,
           NULL::numeric AS unit_price,
-          amount as total_amount,
-          description AS party_name,
-          season_id,
+          e.amount as total_amount,
+          e.description AS party_name,
+          e.season_id,
           i.item_name,
           s.season_name
         FROM Expenses e
@@ -727,9 +726,9 @@ app.get('/api/report', authMiddleware, async (req, res) => {
     const expenses = reportData.rows.filter(row => row.transaction_type === 'expense');
 
     // Calculate totals
-    const totalPurchases = purchases.reduce((sum, p) => sum + parseFloat(p.total_amount), 0);
-    const totalSales = sales.reduce((sum, s) => sum + parseFloat(s.total_amount), 0);
-    const totalExpenses = expenses.reduce((sum, e) => sum + parseFloat(e.total_amount), 0);
+    const totalPurchases = purchases.reduce((sum, p) => sum + parseFloat(p.total_amount || 0), 0);
+    const totalSales = sales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
+    const totalExpenses = expenses.reduce((sum, e) => sum + parseFloat(e.total_amount || 0), 0);
 
     res.json({
       success: true,
@@ -756,7 +755,7 @@ app.get('/api/report', authMiddleware, async (req, res) => {
 
   } catch (err) {
     console.error('Report error:', err.message);
-    res.status(500).json({ success: false, msg: 'Server Error' });
+    res.status(500).json({ success: false, msg: 'Server Error', error: err.message });
   }
 });
 // =================================================================
