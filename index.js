@@ -500,7 +500,7 @@ app.delete('/api/expenses/:id', [authMiddleware, adminMiddleware], async (req, r
   }
 });
 
-// Seasons Routes
+/// GET all seasons
 app.get('/api/seasons', authMiddleware, async (req, res) => {
   try {
     const allSeasons = await pool.query('SELECT * FROM Seasons ORDER BY season_id DESC');
@@ -514,6 +514,8 @@ app.get('/api/seasons', authMiddleware, async (req, res) => {
 // POST new season
 app.post('/api/seasons', [authMiddleware, adminMiddleware], async (req, res) => {
   try {
+    console.log('Request body:', req.body); // Debug log
+    
     const { season_name } = req.body;
 
     // Validate required fields
@@ -521,7 +523,7 @@ app.post('/api/seasons', [authMiddleware, adminMiddleware], async (req, res) => 
       return res.status(400).json({ success: false, msg: 'Season name is required' });
     }
 
-    // Validate season name length (database has VARCHAR(50) limit)
+    // Validate season name length
     if (season_name.length > 50) {
       return res.status(400).json({ success: false, msg: 'Season name cannot exceed 50 characters' });
     }
@@ -536,20 +538,20 @@ app.post('/api/seasons', [authMiddleware, adminMiddleware], async (req, res) => 
       return res.status(400).json({ success: false, msg: 'Season already exists' });
     }
 
-    // Insert new season (only season_name, as that's what the table has)
+    // Insert new season
     const newSeason = await pool.query(
       'INSERT INTO Seasons (season_name) VALUES ($1) RETURNING *',
       [season_name]
     );
 
+    console.log('Season created:', newSeason.rows[0]); // Debug log
     res.status(201).json({ success: true, data: newSeason.rows[0] });
+    
   } catch (err) {
     console.error('Add season error:', err);
-    console.error('Request body:', req.body);
     res.status(500).json({ success: false, msg: 'Server Error', error: err.message });
   }
 });
-
 app.delete('/api/seasons/:id', [authMiddleware, adminMiddleware], async (req, res) => {
   const client = await pool.connect();
   try {
