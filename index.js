@@ -511,28 +511,42 @@ app.get('/api/seasons', authMiddleware, async (req, res) => {
   }
 });
 
+// POST new season
 app.post('/api/seasons', [authMiddleware, adminMiddleware], async (req, res) => {
   try {
-    const { season_name, start_date, end_date } = req.body;
+    const { season_name } = req.body;
 
+    // Validate required fields
     if (!season_name) {
       return res.status(400).json({ success: false, msg: 'Season name is required' });
     }
 
-    const existingSeason = await pool.query('SELECT * FROM Seasons WHERE LOWER(season_name) = LOWER($1)', [season_name]);
+    // Validate season name length (database has VARCHAR(50) limit)
+    if (season_name.length > 50) {
+      return res.status(400).json({ success: false, msg: 'Season name cannot exceed 50 characters' });
+    }
+
+    // Check if season already exists
+    const existingSeason = await pool.query(
+      'SELECT * FROM Seasons WHERE LOWER(season_name) = LOWER($1)', 
+      [season_name]
+    );
+    
     if (existingSeason.rows.length > 0) {
       return res.status(400).json({ success: false, msg: 'Season already exists' });
     }
 
+    // Insert new season (only season_name, as that's what the table has)
     const newSeason = await pool.query(
-      'INSERT INTO Seasons (season_name, start_date, end_date) VALUES ($1, $2, $3) RETURNING *',
-      [season_name, start_date, end_date]
+      'INSERT INTO Seasons (season_name) VALUES ($1) RETURNING *',
+      [season_name]
     );
 
     res.status(201).json({ success: true, data: newSeason.rows[0] });
   } catch (err) {
-    console.error('Add season error:', err.message);
-    res.status(500).json({ success: false, msg: 'Server Error' });
+    console.error('Add season error:', err);
+    console.error('Request body:', req.body);
+    res.status(500).json({ success: false, msg: 'Server Error', error: err.message });
   }
 });
 
