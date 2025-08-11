@@ -164,18 +164,51 @@ app.post('/api/register', async (req, res) => {
 // Dashboard Summary
 app.get('/api/dashboard-summary', authMiddleware, async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT
-        COALESCE((SELECT SUM(quantity * unit_price) FROM Purchases), 0) AS total_purchases,
-        COALESCE((SELECT SUM(quantity * unit_price) FROM Sales), 0) AS total_sales,
-        COALESCE((SELECT SUM(amount) FROM Expenses), 0) AS total_expenses,
-        COALESCE((SELECT SUM(stock_quantity) FROM Items), 0) AS total_stock_quantity
-    `);
+    const { season_id } = req.query;
+    
+    let purchaseQuery, salesQuery, expenseQuery, stockQuery;
+    let params = [];
+    
+    if (season_id) {
+      // Season-specific queries
+      purchaseQuery = `
+        SELECT COALESCE(SUM(quantity * unit_price), 0) AS total_purchases
+        FROM Purchases 
+        WHERE season_id = $1
+      `;
+      salesQuery = `
+        SELECT COALESCE(SUM(quantity * unit_price), 0) AS total_sales
+        FROM Sales 
+        WHERE season_id = $1
+      `;
+      expenseQuery = `
+        SELECT COALESCE(SUM(amount), 0) AS total_expenses
+        FROM Expenses 
+        WHERE season_id = $1
+      `;
+      params = [season_id];
+    } else {
+      // All seasons queries (original behavior)
+      purchaseQuery = `SELECT COALESCE(SUM(quantity * unit_price), 0) AS total_purchases FROM Purchases`;
+      salesQuery = `SELECT COALESCE(SUM(quantity * unit_price), 0) AS total_sales FROM Sales`;
+      expenseQuery = `SELECT COALESCE(SUM(amount), 0) AS total_expenses FROM Expenses`;
+    }
+    
+    // Stock quantity is always total (not season-specific)
+    stockQuery = `SELECT COALESCE(SUM(stock_quantity), 0) AS total_stock_quantity FROM Items`;
 
-    const stats = result.rows[0];
-    const totalPurchases = parseFloat(stats.total_purchases) || 0;
-    const totalSales = parseFloat(stats.total_sales) || 0;
-    const totalExpenses = parseFloat(stats.total_expenses) || 0;
+    // Execute all queries
+    const [purchaseResult, salesResult, expenseResult, stockResult] = await Promise.all([
+      pool.query(purchaseQuery, params),
+      pool.query(salesQuery, params),
+      pool.query(expenseQuery, params),
+      pool.query(stockQuery)
+    ]);
+
+    const totalPurchases = parseFloat(purchaseResult.rows[0].total_purchases) || 0;
+    const totalSales = parseFloat(salesResult.rows[0].total_sales) || 0;
+    const totalExpenses = parseFloat(expenseResult.rows[0].total_expenses) || 0;
+    const totalStockQuantity = parseFloat(stockResult.rows[0].total_stock_quantity) || 0;
     const profit = totalSales - (totalPurchases + totalExpenses);
 
     res.json({
@@ -184,8 +217,9 @@ app.get('/api/dashboard-summary', authMiddleware, async (req, res) => {
         totalPurchases,
         totalSales,
         totalExpenses,
-        totalStockValue: parseFloat(stats.total_stock_quantity) || 0,
+        totalStockValue: totalStockQuantity,
         profit,
+        seasonFiltered: !!season_id
       }
     });
   } catch (err) {
@@ -598,52 +632,68 @@ app.delete('/api/seasons/:id', [authMiddleware, adminMiddleware], async (req, re
 app.get('/api/report', authMiddleware, async (req, res) => {
   try {
     const { season_id, item_id, start_date, end_date } = req.query;
-    let params = [];
-    let paramIndex = 1;
-
-    let query = `
-      SELECT 
-        'purchase' AS transaction_type, 
-        purchase_id AS id, 
-        date, 
-        item_id, 
-        quantity, 
-        unit_price,
-        (quantity * unit_price) as total_amount,
-        vendor_name AS party_name, 
-        season_id 
-      FROM Purchases
-      
-      UNION ALL
-      
-      SELECT 
-        'sale' AS transaction_type, 
-        sale_id AS id, 
-        date, 
-        item_id, 
-        quantity, 
-        unit_price, 
-        (quantity * unit_price) as total_amount,
-        customer_name AS party_name, 
-        season_id 
-      FROM Sales
-      
-      UNION ALL
-      
-      SELECT 
-        'expense' AS transaction_type,
-        expense_id AS id,
-        date,
-        item_id,
-        NULL::numeric AS quantity,
-        NULL::numeric AS unit_price,
-        amount as total_amount,
-        description AS party_name,
-        season_id
-      FROM Expenses
+    
+    // Build the main query with better structure
+    let baseQuery = `
+      WITH combined_transactions AS (
+        SELECT 
+          'purchase' AS transaction_type, 
+          purchase_id AS id, 
+          date, 
+          item_id, 
+          quantity, 
+          unit_price,
+          (quantity * unit_price) as total_amount,
+          vendor_name AS party_name, 
+          season_id,
+          i.item_name,
+          s.season_name
+        FROM Purchases p
+        LEFT JOIN Items i ON p.item_id = i.item_id
+        LEFT JOIN Seasons s ON p.season_id = s.season_id
+        
+        UNION ALL
+        
+        SELECT 
+          'sale' AS transaction_type, 
+          sale_id AS id, 
+          date, 
+          item_id, 
+          quantity, 
+          unit_price, 
+          (quantity * unit_price) as total_amount,
+          customer_name AS party_name, 
+          season_id,
+          i.item_name,
+          s.season_name
+        FROM Sales sa
+        LEFT JOIN Items i ON sa.item_id = i.item_id
+        LEFT JOIN Seasons s ON sa.season_id = s.season_id
+        
+        UNION ALL
+        
+        SELECT 
+          'expense' AS transaction_type,
+          expense_id AS id,
+          date,
+          item_id,
+          NULL::numeric AS quantity,
+          NULL::numeric AS unit_price,
+          amount as total_amount,
+          description AS party_name,
+          season_id,
+          i.item_name,
+          s.season_name
+        FROM Expenses e
+        LEFT JOIN Items i ON e.item_id = i.item_id
+        LEFT JOIN Seasons s ON e.season_id = s.season_id
+      )
+      SELECT * FROM combined_transactions
     `;
 
     let whereClauses = [];
+    let params = [];
+    let paramIndex = 1;
 
     if (season_id) {
       whereClauses.push(`season_id = $${paramIndex}`);
@@ -664,31 +714,51 @@ app.get('/api/report', authMiddleware, async (req, res) => {
     }
 
     if (whereClauses.length > 0) {
-      query = `
-        SELECT * FROM (${query}) AS combined_data
-        WHERE ${whereClauses.join(' AND ')}
-      `;
+      baseQuery += ` WHERE ${whereClauses.join(' AND ')}`;
     }
 
-    query += ' ORDER BY date ASC, id ASC';
+    baseQuery += ' ORDER BY date DESC, id DESC';
 
-    const reportData = await pool.query(query, params);
+    const reportData = await pool.query(baseQuery, params);
 
-    const data = reportData.rows.map(row => ({
-      ...row,
-      quantity: row.quantity?.toString(),
-      unit_price: row.unit_price?.toString(),
-      total_amount: row.total_amount?.toString(),
-    }));
+    // Separate data by transaction type for easier processing
+    const purchases = reportData.rows.filter(row => row.transaction_type === 'purchase');
+    const sales = reportData.rows.filter(row => row.transaction_type === 'sale');
+    const expenses = reportData.rows.filter(row => row.transaction_type === 'expense');
 
-    res.json({ success: true, data: data });
+    // Calculate totals
+    const totalPurchases = purchases.reduce((sum, p) => sum + parseFloat(p.total_amount), 0);
+    const totalSales = sales.reduce((sum, s) => sum + parseFloat(s.total_amount), 0);
+    const totalExpenses = expenses.reduce((sum, e) => sum + parseFloat(e.total_amount), 0);
+
+    res.json({
+      success: true,
+      data: {
+        transactions: reportData.rows,
+        purchases: purchases,
+        sales: sales,
+        expenses: expenses,
+        summary: {
+          totalPurchases,
+          totalSales,
+          totalExpenses,
+          profit: totalSales - (totalPurchases + totalExpenses),
+          transactionCount: reportData.rows.length
+        },
+        filters: {
+          season_id,
+          item_id,
+          start_date,
+          end_date
+        }
+      }
+    });
 
   } catch (err) {
     console.error('Report error:', err.message);
     res.status(500).json({ success: false, msg: 'Server Error' });
   }
 });
-
 // =================================================================
 // >> SUPER ADMIN PROTECTED ROUTES <<
 // =================================================================
