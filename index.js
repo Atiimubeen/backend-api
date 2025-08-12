@@ -385,22 +385,35 @@ app.delete('/api/purchases/:id', [authMiddleware, adminMiddleware], async (req, 
 });
 
 // Sales Routes
+// Sales Routes
 app.get('/api/sales', authMiddleware, async (req, res) => {
   try {
-    const allSales = await pool.query(`
+    const { season_id } = req.query; // Add this line
+    
+    let query = `
       SELECT s.*, i.item_name, se.season_name
       FROM Sales s
       JOIN Items i ON s.item_id = i.item_id
       LEFT JOIN Seasons se ON s.season_id = se.season_id
-      ORDER BY s.date DESC, s.sale_id DESC
-    `);
+    `;
+    
+    let params = [];
+    
+    // Add season filter if season_id is provided
+    if (season_id) {
+      query += ` WHERE s.season_id = $1`;
+      params.push(season_id);
+    }
+    
+    query += ` ORDER BY s.date DESC, s.sale_id DESC`;
+    
+    const allSales = await pool.query(query, params);
     res.json({ success: true, data: allSales.rows });
   } catch (err) {
     console.error('Get sales error:', err.message);
     res.status(500).json({ success: false, msg: 'Server Error' });
   }
 });
-
 app.post('/api/sales', [authMiddleware, adminMiddleware], async (req, res) => {
   const client = await pool.connect();
   try {
