@@ -489,22 +489,35 @@ app.delete('/api/sales/:id', [authMiddleware, adminMiddleware], async (req, res)
 });
 
 // Expenses Routes
+// Expenses Routes
 app.get('/api/expenses', authMiddleware, async (req, res) => {
   try {
-    const allExpenses = await pool.query(`
+    const { season_id } = req.query; // Add this line
+    
+    let query = `
       SELECT e.*, i.item_name, s.season_name
       FROM Expenses e
       LEFT JOIN Items i ON e.item_id = i.item_id
       LEFT JOIN Seasons s ON e.season_id = s.season_id
-      ORDER BY e.date DESC, e.expense_id DESC
-    `);
+    `;
+    
+    let params = [];
+    
+    // Add season filter if season_id is provided
+    if (season_id) {
+      query += ` WHERE e.season_id = $1`;
+      params.push(season_id);
+    }
+    
+    query += ` ORDER BY e.date DESC, e.expense_id DESC`;
+    
+    const allExpenses = await pool.query(query, params);
     res.json({ success: true, data: allExpenses.rows });
   } catch (err) {
     console.error('Get expenses error:', err.message);
     res.status(500).json({ success: false, msg: 'Server Error' });
   }
-});
-
+})
 app.post('/api/expenses', [authMiddleware, adminMiddleware], async (req, res) => {
   try {
     const { date, expense_type, linked_transaction_id, item_id, amount, description, season_id } = req.body;
